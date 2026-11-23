@@ -6,7 +6,7 @@
 
 A token launch radar: it reads DefiLlama's sealed protocol snapshot, ranks every protocol with no token on record by the implied value its token would have, and shows how to farm each one.
 
-The value model is calibrated from the snapshot itself: each protocol's implied value is its TVL times its sector's median market-cap-to-TVL ratio (computed from the snapshot's live protocols), adjusted by 7-day growth and by how long it has run with no token. No protocol name is special-cased.
+The value model (radar-3) is fitted from the snapshot itself: a ridge regression on the snapshot's live protocols predicts log(market cap / TVL) from size, age and category, with the penalty and the terms picked by leave-one-out error — the size curve is fitted, not assumed. Each row's implied value is TVL × fitted multiple × token odds, where token odds come from the share of protocols that already record a token at each age. Every row carries a P25–P75 range from the fit's own leave-one-out residuals and a FARM / MARGINAL / SKIP verdict priced on the downside value. The dashboard also carries the full 758-protocol ledger and recomputes every row in the page to verify the board. No protocol name is special-cased.
 
 ## Run it
 

@@ -1,14 +1,14 @@
 // Token Radar, a token-radar-01 entry (Node 22, standard library only).
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
-// every pre-token protocol with the sector-calibrated model in lib/model.ts, writes the ranked board
-// to /output/board.json, writes the dashboard's dataset to /output/data.js, and copies this
-// repository's dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json, the
-// summary the judge reads, with the vendored make.fun library.
+// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), fits the
+// radar-3 regression on the snapshot's live protocols and scores every pre-token protocol with it
+// (lib/model.ts), writes the ranked board to /output/board.json, writes the dashboard's dataset to
+// /output/data.js, and copies this repository's dashboard/ and screenshots/ to /output. Last, it
+// writes /output/dossier.json, the summary the judge reads, with the vendored make.fun library.
 //
-// The run is deterministic: the model reads only the snapshot's figures, sorts every tie by slug, and
-// never touches the clock, so two runs write identical bytes. The dashboard is a static page with no
-// network: dashboard/index.html, dashboard/app.css and dashboard/app.js read /output/data.js.
+// The run is deterministic: the fit reads only the snapshot's figures, every tie is sorted by slug,
+// and nothing touches the clock, so two runs write identical bytes. The dashboard is a static page
+// with no network: dashboard/index.html, dashboard/app.css and dashboard/app.js read /output/data.js.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -84,5 +84,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: fit on ${radar.fit.training_n} live protocols, terms ${radar.fit.terms.join('+')}, lambda ${radar.fit.lambda}, LOO miss x${Math.exp(radar.fit.loo_median).toFixed(2)}, walk-forward x${Math.exp(radar.fit.wf_median).toFixed(2)}\n` +
+    `token radar: verdicts FARM ${radar.verdicts.farm} / MARGINAL ${radar.verdicts.marginal} / SKIP ${radar.verdicts.skip}; ledger ${radar.ledger_counts.ranked} ranked + ${radar.ledger_counts.has_token} with a token + ${radar.ledger_counts.not_ranked} not ranked\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dash.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
