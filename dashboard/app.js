@@ -46,8 +46,9 @@
   function round2(n) { return Math.round(n * 100) / 100; }
 
   // The fitted model in one function, the same arithmetic lib/model.ts scores with. Coefficients
-  // arrive in order: intercept, then the kept terms in logTvl, logTvl^2, growth, logAge order,
-  // then one dummy per category. The odds come from the age buckets; unknown age takes the global.
+  // arrive in order: intercept, then the kept terms in logTvl, logTvl^2, growth, logAge,
+  // logChains, recent order, then one dummy per category. The odds come from the age buckets;
+  // unknown age takes the global.
   function recompute(row) {
     var R = DATA.recompute;
     var M = DATA.model;
@@ -66,6 +67,14 @@
     if (terms.indexOf('logAge') >= 0) {
       var la = Math.log(age + 1) - R.mean_log_age;
       pred += R.coefficients[k] * la; parts.push({ label: 'Age (log days)', value: R.coefficients[k] * la }); k++;
+    }
+    if (terms.indexOf('logChains') >= 0) {
+      var lc = Math.log((row.chains || []).length) - R.mean_log_chains;
+      pred += R.coefficients[k] * lc; parts.push({ label: 'Chains (log count)', value: R.coefficients[k] * lc }); k++;
+    }
+    if (terms.indexOf('recent') >= 0) {
+      var rc = age < 365 ? 1 : 0;
+      pred += R.coefficients[k] * rc; parts.push({ label: 'Listed in the last year', value: R.coefficients[k] * rc }); k++;
     }
     if (terms.indexOf('cats') >= 0) {
       for (var i = 0; i < R.categories.length; i++) {
@@ -424,7 +433,7 @@
     document.getElementById('kpi-wf').textContent = fmtMiss(fit.wf_median);
     document.getElementById('kpi-range').textContent = (fit.range_honesty * 100).toFixed(1) + '%';
     document.getElementById('kpi-brier').textContent = DATA.odds.brier.toFixed(3) + ' vs ' + DATA.odds.brier_base.toFixed(3);
-    document.getElementById('kpi-terms').textContent = fit.terms.length + ' of 5';
+    document.getElementById('kpi-terms').textContent = fit.terms.length + ' of 7';
     document.getElementById('kpi-farm').textContent = DATA.verdicts.farm + ' of ' + DATA.board_size;
     document.getElementById('kpi-watch').textContent = DATA.watchlist_size + ' / ' + DATA.watchlist_size;
     var lc = DATA.ledger_counts;
@@ -475,6 +484,8 @@
         el('td', { class: 'num', text: fmtMiss(t.loo_without_median) }),
         el('td', { class: 'num', text: fmtMiss(t.loo_with_mean) }),
         el('td', { class: 'num', text: fmtMiss(t.loo_without_mean) }),
+        el('td', { class: 'num', text: fmtMiss(t.wf_with_median) }),
+        el('td', { class: 'num', text: fmtMiss(t.wf_without_median) }),
         el('td', null, el('span', { class: 'badge ' + (t.kept ? 'farm' : 'skip'), text: t.kept ? 'Kept' : 'Dropped' }))
       ));
     });
@@ -483,7 +494,9 @@
       logTvl: 'Per e-fold of TVL above the mean — the size curve',
       'logTvl^2': 'Curvature in the size effect',
       growth: 'Per unit of clamped 7-day growth',
-      logAge: 'Per e-fold of age above the mean'
+      logAge: 'Per e-fold of age above the mean',
+      logChains: 'Per e-fold of chain count above the mean',
+      recent: 'Shift for protocols listed in the last year'
     };
     var ct = document.querySelector('#coefs tbody');
     fit.coefficients.forEach(function (c) {
