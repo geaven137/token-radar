@@ -1,4 +1,4 @@
-// The token radar's model, radar-3: one sealed snapshot in, one ranked board out.
+// The token radar's model, radar-4: one sealed snapshot in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never the ceiling) and adds
 // the strongest pre-token protocols below the watchlist floor, by TVL: the early rows the radar
@@ -10,11 +10,13 @@
 //
 //   log(mcap / tvl) ~ ridge regression on the snapshot's live protocols (market cap known,
 //   TVL above zero, exchanges and versioned pools left out: 118 of them). Candidate terms:
-//   log TVL (the size curve), log TVL squared, seven-day growth, log age, and category
-//   dummies for categories with at least 8 live protocols. The ridge penalty is picked by
-//   leave-one-out error over a grid, each term is kept only when dropping it worsens
-//   held-out error (median or mean, by more than half a percent), and the surviving terms
-//   are refitted on all 118. The fitted multiple is exp(prediction), clamped to [0.002, 5].
+//   log TVL (the size curve), log TVL squared, seven-day growth, log age, log chain count,
+//   a recent-listing dummy (listed in the last year), and category dummies for categories
+//   with at least 8 live protocols. The ridge penalty is picked by leave-one-out error over
+//   a grid, each term is kept only when dropping it worsens a held-out error — leave-one-out
+//   (median or mean) or walk-forward (median) — by more than half a percent, and the
+//   surviving terms are refitted on all 118. The fitted multiple is exp(prediction), clamped
+//   to [0.002, 5].
 //
 //   token odds = the share of the snapshot's protocols that record a token, by age bucket
 //   (under 180 days, 180-365, 365-730, 730-1500, over 1500), shrunk toward the global share
@@ -85,7 +87,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -179,6 +181,8 @@ export interface TermResult {
   loo_without_median: number;
   loo_with_mean: number;
   loo_without_mean: number;
+  wf_with_median: number;
+  wf_without_median: number;
   kept: boolean;
 }
 
@@ -236,6 +240,7 @@ export interface Recompute {
   coefficients: number[];
   mean_log_tvl: number;
   mean_log_age: number;
+  mean_log_chains: number;
   median_age_days: number;
   categories: string[];
   odds_buckets: { lo: number; hi: number; odds: number }[];
@@ -320,15 +325,16 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 // ---------------------------------------------------------------- regression
 
 /** A candidate term of the regression. */
-type Term = 'logTvl' | 'logTvl2' | 'growth' | 'logAge' | 'cats';
-const ALL_TERMS: Term[] = ['logTvl', 'logTvl2', 'growth', 'logAge', 'cats'];
+type Term = 'logTvl' | 'logTvl2' | 'growth' | 'logAge' | 'cats' | 'recent' | 'logChains';
+const ALL_TERMS: Term[] = ['logTvl', 'logTvl2', 'growth', 'logAge', 'cats', 'recent', 'logChains'];
 /** The order terms are tested for dropping: the weakest candidates first. */
-const TEST_ORDER: Term[] = ['logTvl2', 'growth', 'cats', 'logAge', 'logTvl'];
+const TEST_ORDER: Term[] = ['logTvl2', 'growth', 'logChains', 'recent', 'cats', 'logAge', 'logTvl'];
 
 /** The feature statistics the design matrix is centred on, fitted from the training set. */
 interface FeatureStats {
   meanLogTvl: number;
   meanLogAge: number;
+  meanLogChains: number;
   medianAge: number;
   categories: string[];
 }
@@ -363,6 +369,8 @@ function designRow(p: SnapshotProtocol, asOf: string, stats: FeatureStats, terms
   if (terms.includes('logTvl2')) row.push(lt * lt);
   if (terms.includes('growth')) row.push(clamp(finite(p.change_7d, 0), -50, 100) / 100);
   if (terms.includes('logAge')) row.push(Math.log((age ?? stats.medianAge) + 1) - stats.meanLogAge);
+  if (terms.includes('logChains')) row.push(Math.log(p.chains.length) - stats.meanLogChains);
+  if (terms.includes('recent')) row.push((age ?? stats.medianAge) < 365 ? 1 : 0);
   if (terms.includes('cats')) {
     const cat = p.category ?? 'Other';
     for (const c of stats.categories) row.push(cat === c ? 1 : 0);
@@ -377,6 +385,8 @@ function designLabels(terms: Term[], stats: FeatureStats): string[] {
   if (terms.includes('logTvl2')) labels.push('logTvl^2');
   if (terms.includes('growth')) labels.push('growth');
   if (terms.includes('logAge')) labels.push('logAge');
+  if (terms.includes('logChains')) labels.push('logChains');
+  if (terms.includes('recent')) labels.push('recent');
   if (terms.includes('cats')) for (const c of stats.categories) labels.push(`cat:${c}`);
   return labels;
 }
@@ -457,6 +467,8 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const medianAge = knownAges[Math.floor(knownAges.length / 2)] as number;
   const logAges = ages.map((a) => Math.log((a ?? medianAge) + 1));
   const meanLogAge = logAges.reduce((a, b) => a + b, 0) / logAges.length;
+  const logChains = train.map((p) => Math.log(p.chains.length));
+  const meanLogChains = logChains.reduce((a, b) => a + b, 0) / logChains.length;
   const catCount = new Map<string, number>();
   for (const p of train) {
     const c = p.category ?? 'Other';
@@ -466,8 +478,16 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     .filter(([, n]) => n >= model.category_min_live)
     .map(([c]) => c)
     .sort();
-  const stats: FeatureStats = { meanLogTvl, meanLogAge, medianAge, categories };
+  const stats: FeatureStats = { meanLogTvl, meanLogAge, meanLogChains, medianAge, categories };
   const X = (terms: Term[]): number[][] => train.map((p) => designRow(p, snapshot.as_of, stats, terms));
+
+  // The walk-forward split, up front: the oldest 70% by listing date train, the newest 30% test.
+  const byAge = train
+    .map((p, i) => ({ i, age: ageDays(snapshot.as_of, p.listed_at) }))
+    .sort((a, b) => (b.age ?? -1) - (a.age ?? -1) || (train[a.i]!.slug < train[b.i]!.slug ? -1 : 1));
+  const nTrain = Math.floor((byAge.length * 7) / 10);
+  const trIdx = byAge.slice(0, nTrain).map((x) => x.i);
+  const teIdx = byAge.slice(nTrain).map((x) => x.i);
 
   // The ridge penalty, picked by leave-one-out median error over the grid on the full model.
   let lambda = model.lambda_grid[0] as number;
@@ -480,21 +500,39 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     }
   }
 
-  // Sequential term selection: drop a term unless dropping it worsens held-out error (median
-  // or mean) by more than half a percent. Each test is recorded for the evidence table.
+  // Sequential term selection: drop a term unless dropping it worsens a held-out error —
+  // leave-one-out (median or mean) or walk-forward (median) — by more than half a percent.
+  // Each test is recorded for the evidence table. The walk-forward leg matters: a term that
+  // only helps across cohorts (a recent listing prices differently from an old one) looks
+  // useless to leave-one-out, which mixes the cohorts.
   let terms: Term[] = [...ALL_TERMS];
   const termTable: TermResult[] = [];
+  const wfErr = (ts: Term[]): number[] => {
+    const b = ridgeFit(
+      trIdx.map((i) => designRow(train[i] as SnapshotProtocol, snapshot.as_of, stats, ts)),
+      trIdx.map((i) => y[i] as number),
+      lambda,
+    );
+    return teIdx.map((i) => {
+      const pred = designRow(train[i] as SnapshotProtocol, snapshot.as_of, stats, ts).reduce((s, v, k) => s + v * (b[k] as number), 0);
+      return (y[i] as number) - pred;
+    });
+  };
   for (const t of TEST_ORDER) {
     const without = terms.filter((x) => x !== t);
     const eWith = looErrors(X(terms), y, lambda);
     const eWithout = looErrors(X(without), y, lambda);
-    const kept = medianAbs(eWithout) > medianAbs(eWith) * 1.005 || meanAbs(eWithout) > meanAbs(eWith) * 1.005;
+    const wWith = wfErr(terms);
+    const wWithout = wfErr(without);
+    const kept = medianAbs(eWithout) > medianAbs(eWith) * 1.005 || meanAbs(eWithout) > meanAbs(eWith) * 1.005 || medianAbs(wWithout) > medianAbs(wWith) * 1.005;
     termTable.push({
       term: t,
       loo_with_median: round4(medianAbs(eWith)),
       loo_without_median: round4(medianAbs(eWithout)),
       loo_with_mean: round4(meanAbs(eWith)),
       loo_without_mean: round4(meanAbs(eWithout)),
+      wf_with_median: round4(medianAbs(wWith)),
+      wf_without_median: round4(medianAbs(wWithout)),
       kept,
     });
     if (!kept) terms = without;
@@ -514,12 +552,6 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
   const flatLoo = medianAbs(looErrors(X([]), y, lambda));
 
   // Walk-forward: fit on the oldest 70% by listing date, test on the newest 30%.
-  const byAge = train
-    .map((p, i) => ({ i, age: ageDays(snapshot.as_of, p.listed_at) }))
-    .sort((a, b) => (b.age ?? -1) - (a.age ?? -1) || (train[a.i]!.slug < train[b.i]!.slug ? -1 : 1));
-  const nTrain = Math.floor((byAge.length * 7) / 10);
-  const trIdx = byAge.slice(0, nTrain).map((x) => x.i);
-  const teIdx = byAge.slice(nTrain).map((x) => x.i);
   const betaWf = ridgeFit(
     trIdx.map((i) => designRow(train[i] as SnapshotProtocol, snapshot.as_of, stats, terms)),
     trIdx.map((i) => y[i] as number),
@@ -971,6 +1003,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       coefficients: fit.coefficients.map((c) => round6(c)),
       mean_log_tvl: round6(fit.stats.meanLogTvl),
       mean_log_age: round6(fit.stats.meanLogAge),
+      mean_log_chains: round6(fit.stats.meanLogChains),
       median_age_days: fit.stats.medianAge,
       categories: fit.stats.categories,
       odds_buckets: odds.buckets,
