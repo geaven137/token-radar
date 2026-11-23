@@ -1,7 +1,7 @@
 // Token Radar, a token-radar-01 entry (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), fits the
-// radar-3 regression on the snapshot's live protocols and scores every pre-token protocol with it
+// radar-4 regression on the snapshot's live protocols and scores every pre-token protocol with it
 // (lib/model.ts), writes the ranked board to /output/board.json, writes the dashboard's dataset to
 // /output/data.js, and copies this repository's dashboard/ and screenshots/ to /output. Last, it
 // writes /output/dossier.json, the summary the judge reads, with the vendored make.fun library.
